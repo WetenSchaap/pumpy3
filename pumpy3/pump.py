@@ -94,12 +94,12 @@ class Chain(serial.Serial):
     buffers (found during testing that this fixes a lot of problems) and
     logs creation of the Chain. Adapted from pumpy on github.
     """
-    def __init__(self, port, baudrate=115200):
+    def __init__(self, port:str, baudrate:int=9600, timeout:float=0.1):
         """
         :param port: Port of pump at PC
         :type port: str
         """
-        serial.Serial.__init__(self, port=port, stopbits=serial.STOPBITS_TWO, parity=serial.PARITY_NONE, bytesize=serial.EIGHTBITS, xonxoff= False, baudrate = baudrate, timeout=2)
+        serial.Serial.__init__(self, port=port, stopbits=serial.STOPBITS_TWO, parity=serial.PARITY_NONE, bytesize=serial.EIGHTBITS, xonxoff= False, baudrate = baudrate, timeout=timeout)
         self.flushOutput()
         self.flushInput()
         logging.info('Chain created on %s',port)
@@ -753,15 +753,14 @@ class PumpModel33:
             2 : "B",
         }
         self.unit_conversion = {
-            "ul/min": "UM",
-            "ml/min": "MM",
-            "ul/h": "UH",
-            "ml/h": "MH",
+            "ul/mn": "UM",
+            "ml/mn": "MM",
+            "ul/hr": "UH",
+            "ml/hr": "MH",
         }
         # Update state and check firmware version. This acts as a check to see that the pump is connected and working.
         try:
             self.firmware_version = self.get_version()
-            logging.info(f'{self.name}: firmware version {self.firmware_version}')
             if not self.firmware_version.startswith('33'):
                 logging.warning(f'{self.name}: firmware version {self.firmware_version} indicates this is probably not a Model 33 pump. Continue at your own risk.')
             self.update_state()
@@ -773,8 +772,9 @@ class PumpModel33:
 
     def __repr__(self):
         self.update_state()
-        rep = f"PumpModel33 Object ({self.name}) on {str(self.serialcon)} with address {self.address}.\n"
+        rep = f"PumpModel33 Object (name = {self.name}) on <{str(self.serialcon)}> with address <{self.address}>.\n"
         rep += f"State: {self.state}, Mode: {self.mode}, Direction: {self.direction}, Parallel/Reciprocal: {self.parallel_reciprocal}"
+        return rep
 
     def write(self, command: str):
         """Write serial command to pump.
@@ -784,8 +784,8 @@ class PumpModel33:
         command : str
             Command to write.
         """
-        logging.debug(f'{self.name}: writing command: {self.address + command}')
-        self.serialcon.write((self.address + command + '\r').encode())
+        logging.debug(f'{self.name}: writing command: {command}')
+        self.serialcon.write((command + '\r').encode())
 
     def read(self, bytes:int=80) -> str:
         """Read serial stream from pump.
@@ -807,7 +807,6 @@ class PumpModel33:
             return ''
         else:
             response = response.decode()
-            response = response.replace('\n', '')
             return response 
 
     def issue_command(self, command: str, value:str = '', syringe: int = 0, units: str = "") -> list[str]:
@@ -831,11 +830,22 @@ class PumpModel33:
             List of response lines from the pump. Typically, you only care about the last line.
         """
         syringe_command = self.syringe_selection[syringe]
-        instruction =  self.address + ' ' + command + ' ' + syringe_command + ' ' + value + ' ' + units
+        instruction =  (self.address + command + syringe_command + value + units).strip()
         self.write(instruction)
         response = self.read(80).splitlines()
         if not response or len(response) == 0:
             raise PumpError(f'{self.name}: no response to command <{instruction}> - pump may be disconnected?')
+        # The next lines handle the error response from the pump.
+        elif '?' in response[1]:
+            logging.error(f'{self.name}: pump reported SYNTAX ERROR when <{instruction}> was issued.')
+            raise PumpSyntaxError(f'{self.name}: pump reported SYNTAX ERROR when <{instruction}> was issued.')
+        elif 'NA' in response[1]:
+            logging.error(f'{self.name}: pump reported COMMAND NOT APPLICABLE AT THIS TIME error when <{instruction}> was issued.')
+            raise PumpNotApplicableError(f'{self.name}: pump reported COMMAND NOT APPLICABLE AT THIS TIME error when <{instruction}> was issued.')
+        elif 'OOR' in response[1]:
+            logging.error(f'{self.name}: pump reported OUT OF RANGE error when <{instruction}> was issued.')
+            raise PumpOutOfRangeError(f'{self.name}: pump reported OUT OF RANGE error when <{instruction}> was issued.')
+        logging.debug(f'{self.name}: response passed to handler function: {response}')
         return response
 
     def parse_float_response(self, response: str) -> float:
@@ -853,47 +863,73 @@ class PumpModel33:
             Parsed float value.
         """
         try:
-            return float(response[3:9].strip())
+            return float(response.strip())
         except ValueError:
             raise PumpError(f'{self.name}: could not parse float from response {response}')
 
-    def run(self, syringe=0):
-        """Starts pump.
+    def parse_float_to_str(self, number: float) -> str:
+        """
+        Convert a float to a string with 5 symbols, including the seperator.
+        e.g. 12.3 becomes 12.30, 12.345 becomes 12.35, and 2.1 becomes 2.100.
 
         Parameters
         ----------
-        syringe : int, optional
-            Syringe number to run, 0 for do not pass on (either defaults to syringe 1 or is not used).
-        """
-        if self.state == 'idle':
-            resp = self.issue_command('RUN', syringe=syringe)
-            last_line = resp[-1]
+        number : float
+            Number to convert.
 
-            if (last_line[2] == '<' or last_line[2] == '>'):
-                self.state = 'infusing'
-                logging.info('%s: running on syringe %d', self.name, syringe)
+        Returns
+        -------
+        str
+            String representation of the number with two decimal places.
+        """
+        if not (0 <= number < 9999):
+            raise ValueError(f'{self.name}: {number} is out of range for parsing, must be between 0 and 9999')
+        parsed = f"{number:.3f}"[:5].ljust(5, '0')
+        return parsed
+
+    def run(self, already_running_ok: bool = True):
+        """
+        Starts the pump. If the pump is already running and `already_running_ok` is False, the method raises an exception.
+        Parameters
+        ----------
+        already_running_ok : bool, optional
+            If True, does not raise an error if the pump is already running (default is True).
+        """
+        try:
+            resp = self.issue_command('RUN')
+        except PumpNotApplicableError as e:
+            if already_running_ok:
+                logging.info(f'{self.name}: Pump is already running, continuing without error.')
+                return
             else:
-                raise PumpError(f'{self.name}: unknown response to run: {last_line}')
+                raise PumpNotApplicableError(f'{self.name}: Pump is already running, cannot start pump.')
+        state = self.get_state()
+
+        if (state == '<' or state == '>'):
+            self.state = 'infusing'
+            logging.info(f'{self.name}: Pump has started running')
         else:
-            print("Please wait until pump is idle before running.\n")
+            raise PumpError(f'{self.name}: pump is not running: {state}')
         self.update_state()
 
-    def stop(self, syringe=0):
-        """Stops pump.
-
-        Parameters
-        ----------
-        syringe : int, optional
-            Syringe number to stop, 0 for do not pass on (either defaults to syringe 1 or is not used).
+    def stop(self, already_stopped_ok: bool = True):
         """
-        resp = self.issue_command('STP', syringe=syringe)
-        last_line = resp[-1]
-
-        if (last_line[2] == ':'):
+        Stops pump. If the pump is already stopped, nothing will happen.
+        """
+        try:
+            resp = self.issue_command('STP')
+        except PumpNotApplicableError as e:
+            if already_stopped_ok:
+                logging.info(f'{self.name}: Pump is already stopped, continuing without error.')
+            else:
+                raise PumpNotApplicableError(f'{self.name}: Pump is already stopped, cannot stop pump.')
+       
+        state = self.get_state()
+        if (state == ':'):
             self.state = 'idle'
-            logging.info('%s: stopped on syringe %d', self.name, syringe)
+            logging.info(f'{self.name}: stopped pump')
         else:
-            raise PumpError(f'{self.name}: unknown response to stop: {last_line}')
+            raise PumpError(f'{self.name}: pump has not stopped: {state}')
         self.update_state()
 
     def update_state(self):
@@ -913,8 +949,8 @@ class PumpModel33:
         logging.info(f'{self.name}: state: {self.state}, mode: {self.mode}, direction: {self.direction}, parallel/reciprocal: {self.parallel_reciprocal}')
         d1, d2 = self.get_diameter(syringe=1), self.get_diameter(syringe=2)
         r1, r2 = self.get_rate(syringe=1), self.get_rate(syringe=2)
-        logging.info(f'{self.name}: syringe 1 diameter: {d1} mm, flowrate: {r1} ul/min')
-        logging.info(f'{self.name}: syringe 2 diameter: {d2} mm, flowrate: {r2} ul/min')
+        logging.info(f'{self.name}: syringe 1 diameter: {d1} mm, flowrate: {r1}')
+        logging.info(f'{self.name}: syringe 2 diameter: {d2} mm, flowrate: {r2}')
         
     def get_mode(self) -> str:
         """Get the current mode of the pump.
@@ -925,8 +961,7 @@ class PumpModel33:
             Can be AUT(o stop), PRO(portional), or CON(tinuous).
         """
         resp = self.issue_command('MOD')
-        response = resp[-1]
-        return response[3:]
+        return resp[1]
     
     def get_state(self) -> str:
         """Get the current state of syringe 1 of the pump.
@@ -937,9 +972,8 @@ class PumpModel33:
             idle (:), infusing (>), withdrawing (<), or stalled (*).
             Syringe 2 state depends on parallel/reciprocal setting, see self.get_parallel_reciprocal.
         """
-        resp = self.issue_command('MOD')
-        response = resp[-1]
-        return response[2]
+        response = self.issue_command('MOD')
+        return response[2][1]
 
     def get_direction(self) -> str:
         """Get the current direction of syringe 1 of the pump.
@@ -950,9 +984,8 @@ class PumpModel33:
             Can be INFUSE (outward flow) or REFILL (inward flow).
             Syringe 2 direction depends on parallel/reciprocal setting, see self.get_parallel_reciprocal.
         """
-        resp = self.issue_command('DIR')
-        response = resp[-1]
-        return response[3:]
+        response = self.issue_command('DIR')
+        return response[1]
     
     def get_parallel_reciprocal(self) -> str:
         """Get the current parallel/reciprocal setting of the pump.
@@ -962,9 +995,8 @@ class PumpModel33:
         str
             Can be ON (parallel) or OFF (Reciprocal).
         """
-        resp = self.issue_command('PAR')
-        response = resp[-1]
-        return response[3:]
+        response = self.issue_command('PAR')
+        return response[1]
 
     def set_mode(self, mode: str):
         """Set the mode of the pump.
@@ -978,12 +1010,12 @@ class PumpModel33:
             raise PumpError(f'{self.name}: unknown mode {mode}')
         
         resp = self.issue_command('MOD', mode)
-        last_line = resp[-1]
+        set_mode = self.get_mode()
 
-        if (last_line[3:].strip() == mode):
+        if (set_mode == mode):
             logging.info(f'{self.name}: mode set to {mode}')
         else:
-            raise PumpError(f'{self.name}: mode not set correctly, response to set_mode {mode}: {last_line}')
+            raise PumpError(f'{self.name}: mode not set correctly, response to set_mode {mode}: {set_mode}')
         self.update_state()
 
     def set_direction(self, direction: str):
@@ -998,16 +1030,15 @@ class PumpModel33:
             raise PumpError(f'{self.name}: unknown direction {direction}')
         
         old_direction = self.get_direction()
-        
         resp = self.issue_command('DIR', direction)
-        last_line = resp[-1]
+        new_direction = self.get_direction()
 
-        if direction in ['INF','REV'] and (last_line[3:].strip() == direction):
+        if direction in ['INF','REV'] and (new_direction[:3] == direction):
             logging.info(f'{self.name}: direction set to {direction}')
-        elif direction == 'REF' and (last_line[3:].strip() != old_direction) and (last_line[3:].strip() in ['INF','REV']):
+        elif direction == 'REF' and (new_direction != old_direction) and (new_direction[:3] in ['INF','REV']):
             logging.info(f'{self.name}: direction reversed to {direction}')
         else:
-            raise PumpError(f'{self.name}: direction not set correctly, response to set_direction {direction}: {last_line}')
+            raise PumpError(f'{self.name}: direction not set correctly, response to set_direction {direction}: {new_direction}')
         self.update_state()
 
     def set_parallel_reciprocal(self, setting: str):
@@ -1022,9 +1053,8 @@ class PumpModel33:
             raise PumpError(f'{self.name}: unknown parallel/reciprocal setting {setting}')
         
         resp = self.issue_command('PAR', setting)
-        last_line = resp[-1]
-
-        if (last_line[3:].strip() == setting):
+        parrep = self.get_parallel_reciprocal()
+        if (parrep == setting):
             logging.info(f'{self.name}: parallel/reciprocal set to {setting}')
         else:
             raise PumpError(f'{self.name}: parallel/reciprocal not set correctly, response to set_parallel_reciprocal {setting}: {last_line}')
@@ -1040,25 +1070,24 @@ class PumpModel33:
         syringe : int, optional
             Syringe number to set diameter for, 0 for do not pass on (either defaults to syringe 1 or is not used).
         """
-        if diameter > 50 or diameter < 0.1: # manual gives these limits
+        if not (0.1 < diameter < 50): # manual gives these limits
             raise PumpError(f'{self.name}: diameter {diameter} mm is out of range')
         elif syringe > 1 and self.get_mode() != "PRO":
             raise PumpError(f'{self.name}: can only set diameter for syringe 1 if pump is in PRO(portional) mode')
         elif self.get_state() in ("<", ">", "*"):
             raise PumpError(f'{self.name}: cannot set diameter while pump is running, please stop the pump first')
-        
-        str_diameter = "%2.2f" % diameter
+               
+        str_diameter = self.parse_float_to_str(diameter)
         resp = self.issue_command('DIA', str_diameter, syringe) 
-        last_line = resp[-1]
-        returned_diameter = self.parse_float_response(last_line[3:9])
+        returned_diameter = self.get_diameter(syringe)
         # Check diameter was set accurately
         if ("%2.2f" % returned_diameter) != str_diameter:
             logging.error(f'{self.name}: set diameter ({diameter} mm) does not match diameter returned by pump ({returned_diameter} mm)')
         elif float(returned_diameter) == diameter:
-            logging.info(f'{self.name}: diameter set to {self.diameter} mm')
+            logging.info(f'{self.name}: diameter set to {diameter} mm')
         self.update_state()
 
-    def get_diameter(self, syringe:int=0):
+    def get_diameter(self, syringe:int=0) -> float:
         """Get syringe diameter.
 
         Parameters
@@ -1068,16 +1097,16 @@ class PumpModel33:
 
         Returns
         -------
-        str
+        float
             Syringe diameter in mm.
         """
         resp = self.issue_command('DIA', syringe = syringe)
-        last_line = resp[-1]
-        returned_diameter = self.parse_float_response(last_line)
-        logging.info(f'{self.name}: diameter is {returned_diameter} mm')
-        return f"{returned_diameter} mm"
+        relevant_line = resp[1]
+        returned_diameter = self.parse_float_response(relevant_line)
+        logging.debug(f'{self.name}: diameter of syringe <{syringe}> is {returned_diameter} mm')
+        return returned_diameter
 
-    def set_rate(self, flowrate:float, unit:str="ml/h", syringe:int=0):
+    def set_rate(self, flowrate:float, unit:str="ml/hr", syringe:int=0):
         """
         Set flow rate.
 
@@ -1086,19 +1115,24 @@ class PumpModel33:
         flowrate : float
             Flow rate to set.
         unit : str, optional
-            Unit of flow rate, can be 'ml/h', 'ul/h', 'ml/m', or 'ul/m' (default is 'ml/h').
+            Unit of flow rate, can be 'ml/hr', 'ul/hr', 'ml/mn', or 'ul/mn' (default is 'ml/hr').
         syringe : int, optional
             Syringe number to set rate for, 0 for do not pass on (either defaults to syringe 1 or is not used) (default is 0).
         """
+        if unit not in self.unit_conversion:
+            raise ValueError(f'{self.name}: unknown unit {unit}, must be one of {list(self.unit_conversion.keys())}')
         actual_units = self.unit_conversion[unit]
-        rounded_flowrate = round(flowrate, 2)
-        resp = self.issue_command('RAT', f"{rounded_flowrate:.2f}", syringe, actual_units)
-        rate = self.parse_float_response(resp[-1])
-        rateunits = resp[-1][9:].strip()
-        if (rounded_flowrate == rate and rateunits == actual_units):
-            logging.info(f'{self.name}: flow rate set to {self.flowrate} {self.flowrate_units}')
+        parsed_flowrate = self.parse_float_to_str(flowrate)
+        resp = self.issue_command('RAT', f"{parsed_flowrate}", syringe, actual_units)
+        rate_reply = self.get_rate(syringe)
+        
+        logging.debug(f'{self.name}: flowrate of syringe <{syringe}> set to {float(parsed_flowrate)}, outcome = {rate_reply[0]}')
+        logging.debug(f'{self.name}: unit of syringe <{syringe}> set to {unit}, outcome = {rate_reply[1]}')
+
+        if (float(parsed_flowrate) == rate_reply[0]) and (unit == rate_reply[1]):
+            logging.info(f'{self.name}: flowrate of syringe <{syringe}> set to {flowrate} {unit}')
         else:
-            raise PumpError(f'{self.name}: flow rate not set correctly, response to set_rate {flowrate} {unit}: {resp[-1]}')
+            raise PumpError(f'{self.name}: flowrate of syringe <{syringe}> not set correctly, response to set_rate {flowrate} {unit}: {rate_reply}')
         self.update_state()
         
     def get_rate(self, syringe:int=0) -> tuple[float, str]:
@@ -1115,11 +1149,12 @@ class PumpModel33:
             Flow rate and its units.
         """
         resp = self.issue_command('RAT', syringe=syringe)
-        last_line = resp[-1]
-        returned_flowrate = self.parse_float_response(last_line)
-        rateunits = last_line[9:].strip()
-        logging.info(f'{self.name}: flow rate is {returned_flowrate} {rateunits}')
-        return (returned_flowrate, rateunits)
+        relevant_line = resp[1]
+        number = relevant_line[0:6]
+        unit = relevant_line[6:].strip()
+        returned_flowrate = self.parse_float_response(number)
+        logging.debug(f'{self.name}: flow rate is {returned_flowrate} {unit}')
+        return (returned_flowrate, unit)
 
     def get_version(self) -> str:
         """Get the version of the pump firmware.
@@ -1130,8 +1165,8 @@ class PumpModel33:
             Version string of the pump.
         """
         resp = self.issue_command('VER')
-        version = resp[-1][3:].strip()
-        logging.info(f'{self.name}: firmware version is {version}')
+        version = resp[1].strip()
+        logging.debug(f'{self.name}: firmware version is {version}')
         return version
 
     def sleep_with_heartbeat(self, seconds: float, beat_interval: float = 1, error_wakeup: bool = False):
@@ -1155,3 +1190,19 @@ class PumpModel33:
 
 class PumpError(Exception):
     pass
+
+class PumpSyntaxError(PumpError):
+    """Raised when the pump returns a syntax error."""
+    def __init__(self, message):
+        super().__init__(message)
+
+class PumpOutOfRangeError(PumpError):
+    """Raised when the pump returns an out of range error."""
+    def __init__(self, message):
+        super().__init__(message)
+
+class PumpNotApplicableError(PumpError):
+    """Raised when the pump returns a command not applicable error."""
+    def __init__(self, message):
+        super().__init__(message)
+    
