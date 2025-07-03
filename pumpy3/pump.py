@@ -107,6 +107,14 @@ class Chain(serial.Serial):
     def __repr__(self):
         """Return string representation of Chain object."""
         return f"Pump chain on {self.port}"
+    
+    def __enter__(self):
+        #this is called by doing the with... construction
+        return self
+
+    def __exit__(self, exception_type, exception_value, exception_traceback):
+        #Exception handling here, if an error occurs in the with... block
+        self.close()
 
 class Pump:
     """Create Pump object for Harvard Pump.
@@ -753,6 +761,7 @@ class PumpModel33:
         # Update state and check firmware version. This acts as a check to see that the pump is connected and working.
         try:
             self.firmware_version = self.get_version()
+            logging.info(f'{self.name}: firmware version {self.firmware_version}')
             if not self.firmware_version.startswith('33'):
                 logging.warning(f'{self.name}: firmware version {self.firmware_version} indicates this is probably not a Model 33 pump. Continue at your own risk.')
             self.update_state()
@@ -760,9 +769,8 @@ class PumpModel33:
             self.serialcon.close()
             raise
 
-        logging.info('%s: created at address %s on %s', self.name,
-                      self.address, self.serialcon.port)
-        
+        logging.info(f'{self.name}: created at address {self.address} on {self.serialcon.port}')
+
     def __repr__(self):
         self.update_state()
         rep = f"PumpModel33 Object ({self.name}) on {str(self.serialcon)} with address {self.address}.\n"
@@ -802,7 +810,6 @@ class PumpModel33:
             response = response.replace('\n', '')
             return response 
 
-
     def issue_command(self, command: str, value:str = '', syringe: int = 0, units: str = "") -> list[str]:
         """
         Write serial command to pump, and listen to response.
@@ -826,7 +833,10 @@ class PumpModel33:
         syringe_command = self.syringe_selection[syringe]
         instruction =  self.address + ' ' + command + ' ' + syringe_command + ' ' + value + ' ' + units
         self.write(instruction)
-        return self.read(80).splitlines()
+        response = self.read(80).splitlines()
+        if not response or len(response) == 0:
+            raise PumpError(f'{self.name}: no response to command <{instruction}> - pump may be disconnected?')
+        return response
 
     def parse_float_response(self, response: str) -> float:
         """
@@ -895,6 +905,17 @@ class PumpModel33:
         if self.state == '*':
             logging.warning(f'{self.name}: pump is stalled, please check the syringe!')
 
+    def log_all_parameters(self):
+        """Log all parameters of the pump."""
+        self.update_state()
+        logging.info(f'{self.name}: logging all parameters:')
+        logging.info(f'{self.name}: firmware version: {self.firmware_version}')
+        logging.info(f'{self.name}: state: {self.state}, mode: {self.mode}, direction: {self.direction}, parallel/reciprocal: {self.parallel_reciprocal}')
+        d1, d2 = self.get_diameter(syringe=1), self.get_diameter(syringe=2)
+        r1, r2 = self.get_rate(syringe=1), self.get_rate(syringe=2)
+        logging.info(f'{self.name}: syringe 1 diameter: {d1} mm, flowrate: {r1} ul/min')
+        logging.info(f'{self.name}: syringe 2 diameter: {d2} mm, flowrate: {r2} ul/min')
+        
     def get_mode(self) -> str:
         """Get the current mode of the pump.
 
@@ -1113,7 +1134,7 @@ class PumpModel33:
         logging.info(f'{self.name}: firmware version is {version}')
         return version
 
-    def sleep_with_heartbeat(self, seconds: float, beat_interval: float = 1):
+    def sleep_with_heartbeat(self, seconds: float, beat_interval: float = 1, error_wakeup: bool = False):
         """Sleep for a specified number of seconds, while checking the pump state to watch for stall, and making sure pump is not disconnected during wait.
 
         Parameters
@@ -1122,10 +1143,14 @@ class PumpModel33:
             Number of seconds to sleep.
         beat_interval : float, optional
             Interval in seconds to check the pump state (default is 1 second).
+        error_wakeup : bool, optional
+            If True, will raise a PumpError if the pump state changes to stalled or disconnected during the sleep period (default is False).
         """
         end_time = time.time() + seconds
         while time.time() < end_time:
             self.update_state()
+            if self.state == '*' and error_wakeup:
+                raise PumpError(f'{self.name}: pump has stalled, please check the syringe(s)!')
             time.sleep(beat_interval)
 
 class PumpError(Exception):

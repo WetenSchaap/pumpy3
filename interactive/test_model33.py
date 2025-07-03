@@ -45,13 +45,15 @@ pump1 = pumpy3.PumpModel33(chain, 0, name="pump1")
 pump1.stop() # stop the pump if it is running
 pump1.set_diameter(4.0, 1) # this is a 1 mm diameter syringe
 pump1.set_diameter(4.0, 2) # this is a 1 mm diameter syringe
-pump1.set_mode("PRO") # set to PROportions mode
+pump1.set_mode("PRO") # set to PROportional mode
 pump1.set_direction("INF") # set syringe 1 to INFuse
 pump1.set_parallel_reciprocal("OFF") # reciprocal direction (so syringe 2 retracts now)
 pump1.set_rate(1, "ml/h", 1) # set speed to 1 ml/h
 pump1.set_rate(2, "ml/h", 2) # set speed to 2 ml/h
 
 print(pump1)
+
+pump1.log_all_parameters()
 
 print("does everything look good?")
 
