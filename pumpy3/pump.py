@@ -767,7 +767,6 @@ class PumpModel33:
         except PumpError:
             self.serialcon.close()
             raise
-
         logging.info(f'{self.name}: created at address {self.address} on {self.serialcon.port}')
 
     def __repr__(self):
@@ -1073,7 +1072,7 @@ class PumpModel33:
         if not (0.1 < diameter < 50): # manual gives these limits
             raise PumpError(f'{self.name}: diameter {diameter} mm is out of range')
         elif syringe > 1 and self.get_mode() != "PRO":
-            raise PumpError(f'{self.name}: can only set diameter for syringe 1 if pump is in PRO(portional) mode')
+            raise PumpError(f'{self.name}: can only set diameter for syringe <{syringe}> if pump is in PRO(portional) mode')
         elif self.get_state() in ("<", ">", "*"):
             raise PumpError(f'{self.name}: cannot set diameter while pump is running, please stop the pump first')
                
