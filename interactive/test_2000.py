@@ -37,19 +37,19 @@ logging.critical('This is a critical message')
 
 
 #%%
+chain = pumpy3.Chain("com5",baudrate=9600,timeout=2)
 
-chain = pumpy3.Chain("/dev/ttyUSB0", baudrate=9600, timeout=0.1)
-pump1 = pumpy3.Pump2000(chain, 1, name="pump1")
+pump1 = pumpy3.PumpPHD2000(chain, 3, name="pump1")
+
 
 #%% Test the pump
 pump1.stop() # stop the pump if it is running
-pump1.setdiameter(4.0)
-pump1.setinfusionrate(2.0, "m/h") # set the infusion rate to 2 ml/h
-pump1.infuse() # start the pump
+pump1.set_diameter(4.0)
+pump1.set_rate(2.0, "ml/hr") # set the infusion rate to 2 ml/h
+pump1.run() # start the pump
 
 print(pump1)
 
 print("does everything look good?")
 
-#%% Actually run
-pump1.run()
+
