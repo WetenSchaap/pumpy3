@@ -38,8 +38,11 @@ logging.critical('This is a critical message')
 
 #%%
 
-chain = pumpy3.Chain("com5")
-pump1 = pumpy3.Pump2000(chain, 0, name="pump1")
+chain = pumpy3.Chain("com5",baudrate=9600,timeout=2)
+chain.write('03ver\r'.encode())
+chain.read(180)
+
+pump1 = pumpy3.Pump2000(chain, 3, name="pump1")
 
 #%% Test the pump
 pump1.stop() # stop the pump if it is running
