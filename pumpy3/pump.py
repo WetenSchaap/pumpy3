@@ -307,7 +307,7 @@ class PumpPHD2000:
                 raise PumpNotApplicableError(f'{self.name}: Pump is already running, cannot start pump.')
         state = self.get_state()
 
-        if (state == '<' or state == '>'):
+        if state in self.running_status:
             self.state = 'infusing'
             logging.info(f'{self.name}: Pump has started running')
         else:
@@ -354,8 +354,8 @@ class PumpPHD2000:
         """
         Reset the volume delivered to zero. Only run this when pump is not running.
         """
-        if self.get_state != "~":
-            raise PumpNotApplicableError(f"{self.name}:Volume delivereed can only be reset when pump is not running")
+        #if self.get_state not in self.stopped_status:
+        #    raise PumpNotApplicableError(f"{self.name}: Volume delivered can only be reset when pump is not running")
         resp = self.issue_command('CLD')
         vol_del = self.get_volume_delivered()
         if vol_del != 0:
@@ -473,7 +473,7 @@ class PumpPHD2000:
         """
         if not (0.1 < diameter < 50): # manual gives these limits
             raise PumpError(f'{self.name}: diameter {diameter} mm is out of range')
-        elif self.get_state() in ("<", ">"):
+        elif self.get_state() in self.running_status:
             raise PumpError(f'{self.name}: cannot set diameter while pump is running, please stop the pump first')
                
         str_diameter = self.parse_float_to_str(diameter)

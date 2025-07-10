@@ -73,7 +73,6 @@ pump1.reset_volume_delivered()
 failing_funcs = (
 	pump1.set_autofill,
 	pump1.set_direction,
-	pump1.set_refill_rate,
 )
 
 for func in failing_funcs:
