@@ -127,7 +127,7 @@ class Pump:
 class PumpPHD2000:
     def __init__(self, chain:Chain, address:int=0, name:str="PHD2000"):
         """
-        Create Pump object for Harvard PHD 2000 twin syringe pump.
+        Create Pump object for Harvard PHD 2000 twin syringe pump. 
 
         Parameters
         ----------
@@ -140,6 +140,8 @@ class PumpPHD2000:
         
         Notes
         ---------
+        Documentation can be found [here](https://harvardapparatus.com/media/harvard/pdf/PHD2000.pdf).
+        
         Commands that make use of the program function (e.g. SEQ, PGR) are intentionally not implemented - they have limited added value if you are using this script anyway.
         """
         self.name = name
@@ -159,6 +161,9 @@ class PumpPHD2000:
             "PUMP": "PMP",
             "VOLUME": "VLM",
         }
+        self.running_status = ('<','>')
+        self.stopped_status = (':', '*', '/', '^') # stopped, interupted, paused, and wait for trigger respectively.
+        self.stalled_status = tuple() # PHD2000 has no stall detection?
         # Update state and check firmware version. This acts as a check to see that the pump is connected and working.
         try:
             self.firmware_version = self.get_version()
@@ -322,7 +327,7 @@ class PumpPHD2000:
                 raise PumpNotApplicableError(f'{self.name}: Pump is already stopped, cannot stop pump.')
        
         state = self.get_state()
-        if (state == ':'):
+        if state in self.stopped_status:
             self.state = 'idle'
             logging.info(f'{self.name}: stopped pump')
         else:
@@ -364,7 +369,7 @@ class PumpPHD2000:
         self.state = self.get_state()
         self.mode = self.get_mode()
         self.direction = self.get_direction()
-        if self.state == '*':
+        if self.state in self.stalled_status:
             logging.warning(f'{self.name}: pump is stalled, please check the syringe!')
 
     def log_all_parameters(self):
@@ -395,8 +400,7 @@ class PumpPHD2000:
         Returns
         -------
         str
-            idle (:), infusing (>), withdrawing (<), or stalled (*).
-            Syringe 2 state depends on parallel/reciprocal setting, see self.get_parallel_reciprocal.
+            idle (:), infusing (>), withdrawing (<), interupted (*), paused (/), or waiting for trigger (^).
         """
         response = self.issue_command('MOD')
         return response[2][1]
@@ -469,7 +473,7 @@ class PumpPHD2000:
         """
         if not (0.1 < diameter < 50): # manual gives these limits
             raise PumpError(f'{self.name}: diameter {diameter} mm is out of range')
-        elif self.get_state() in ("<", ">", "*"):
+        elif self.get_state() in ("<", ">"):
             raise PumpError(f'{self.name}: cannot set diameter while pump is running, please stop the pump first')
                
         str_diameter = self.parse_float_to_str(diameter)
@@ -584,7 +588,7 @@ class PumpPHD2000:
         volume : float
             Target volume in mL.
         """
-        if self.get_state() in ("<", ">", "*"):
+        if self.get_state() in self.running_status:
             raise PumpError(f'{self.name}: cannot set diameter while pump is running, please stop the pump first')
         str_volume = self.parse_float_to_str(volume)
         resp = self.issue_command('TGT', str_volume) 
@@ -609,9 +613,11 @@ class PumpPHD2000:
             If True, will raise a PumpError if the pump state changes to stalled or disconnected during the sleep period (default is False).
         """
         end_time = time.time() + seconds
+        if len(self.stalled_status) == 0 and error_wakeup:
+            logging.warning(f"{self.name}: This pump does not have automatic stall detection! Error detection will *not* fail when syringe is depleted!")
         while time.time() < end_time:
             self.update_state()
-            if self.state == '*' and error_wakeup:
+            if self.state in self.stalled_status and error_wakeup:
                 raise PumpError(f'{self.name}: pump has stalled, please check the syringe(s)!')
             time.sleep(beat_interval)
 
