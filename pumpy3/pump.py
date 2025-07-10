@@ -387,7 +387,7 @@ class PumpPHD2000:
             Can be PUMP (pump at fixed rate), VOLUME (inject specific volume at set rate), or PGM (program - not suported by this module).
         """
         resp = self.issue_command('MOD')
-        return resp[1]
+        return resp[1].strip()
     
     def get_state(self) -> str:
         """Get the current state of syringe 1 of the pump.
@@ -449,7 +449,7 @@ class PumpPHD2000:
             Auto-fill can be either 'ON' or 'OFF'.
         """
         resp = self.issue_command('AF')
-        relevant_line = resp[1]
+        relevant_line = resp[1].strip()
         logging.debug(f'{self.name}: Auto-fill mode is {relevant_line}')
         return relevant_line
 
@@ -491,7 +491,7 @@ class PumpPHD2000:
             Syringe diameter in mm.
         """
         resp = self.issue_command('DIA')
-        relevant_line = resp[1]
+        relevant_line = resp[1].strip()
         returned_diameter = self.parse_float_response(relevant_line)
         logging.debug(f'{self.name}: diameter of syringe is {returned_diameter} mm')
         return returned_diameter
@@ -533,13 +533,14 @@ class PumpPHD2000:
         """
         resp = self.issue_command('RAT')
         relevant_line = resp[1]
-        number = relevant_line[0:6]
+        relevant_line = relevant_line.strip()
+        number = relevant_line[0:6].strip()
         unit = relevant_line[6:].strip()
         returned_flowrate = self.parse_float_response(number)
         logging.debug(f'{self.name}: flow rate is {returned_flowrate} {unit}')
         return (returned_flowrate, unit)
 
-    def set_refill_rate(self, flowrate:float, unit:str):
+    def set_refill_rate(self, flowrate:float, unit:str=""):
         raise NotImplementedError("This method should be overridden in subclasses.")
     
     def get_refill_rate(self) -> tuple[float,str]:
@@ -590,7 +591,7 @@ class PumpPHD2000:
         returned_volume = self.get_target_volume()
         # Check diameter was set accurately
         if (self.parse_float_to_str(returned_volume)) != str_volume:
-            logging.error(f'{self.name}: set target volume ({volume} mL) does not match diameter returned by pump ({returned_volume}} mL)')
+            logging.error(f'{self.name}: set target volume ({volume} mL) does not match diameter returned by pump ({returned_volume} mL)')
         else:
             logging.info(f'{self.name}: diameter set to {volume} mL')
         self.update_state()
@@ -633,7 +634,7 @@ class PumpPHD2000_Refill(PumpPHD2000):
             Can be INFUSE (outward flow) or REFILL (inward flow).
         """
         response = self.issue_command('DIR')
-        return response[1]
+        return response[1].strip()
 
     def set_direction(self, direction: str):
         """Set the direction of the pump.
@@ -694,8 +695,8 @@ class PumpPHD2000_Refill(PumpPHD2000):
             Flow rate and its units.
         """
         resp = self.issue_command('RFR')
-        relevant_line = resp[1]
-        number = relevant_line[0:6]
+        relevant_line = resp[1].strip()
+        number = relevant_line[0:6].strip()
         unit = relevant_line[6:].strip()
         returned_flowrate = self.parse_float_response(number)
         logging.debug(f'{self.name}: refill flow rate is {returned_flowrate} {unit}')
@@ -765,17 +766,20 @@ class PumpPHD2000_NoRefill(PumpPHD2000):
 
     def set_direction(self, direction: str):
         """Set the direction of the pump.
-        Will raise an 
+        Will raise an PumpFunctionNotAvailable error
         """
         raise PumpFunctionNotAvailable(f"{self.name}: This pump does not support changing pump direction")
 
-    def set_refill_rate(self, flowrate:float, unit:str):
+    def set_refill_rate(self, flowrate:float, unit:str=""):
+        """Will raise an PumpFunctionNotAvailable error"""
         raise PumpFunctionNotAvailable(f"{self.name}: This pump cannot refill, and thus a refill rate cannot be set.")
     
     def get_refill_rate(self) -> tuple[float,str]:
+        """Will raise an PumpFunctionNotAvailable error"""
         raise PumpFunctionNotAvailable(f"{self.name}: This pump cannot refill, and thus a refill rate cannot be get.")
 
     def set_autofill(self, autofill:str):
+        """Will raise an PumpFunctionNotAvailable error"""
         raise PumpFunctionNotAvailable(f"{self.name}: This pump cannot refill, and thus auto-fill mode is always OFF.")
 
 class PumpModel33:
