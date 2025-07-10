@@ -58,7 +58,7 @@ pump1.update_state()
 
 try:
 	pump1.get_refill_rate()
-except pumpy3.PumpFunctionNotAvailable:
+except pumpy3.PumpFunctionNotAvailableError:
 	print("refill not funtioning as expected")
 
 
@@ -78,7 +78,7 @@ failing_funcs = (
 for func in failing_funcs:
 	try:
 		func("")
-	except pumpy3.PumpFunctionNotAvailable:
+	except pumpy3.PumpFunctionNotAvailableError:
 		print("function failed succesfully")
 
 pump1.run() # start the pump

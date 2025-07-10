@@ -35,7 +35,6 @@ class Chain(serial.Serial):
         #Exception handling here, if an error occurs in the with... block
         self.close()
 
-
 class Pump:
     """Base class for Pump objects."""
     def __init__(self, chain: Chain, address: int = 0, name: str = 'Pump'):
@@ -52,6 +51,14 @@ class Pump:
             "ul/hr": "UH",
             "ml/hr": "MH",
         }
+        self.mode_conversion = {
+            "PUMP": "PMP",
+            "VOLUME": "VLM",
+        }
+        # the following statuses probably need to be overwritten for each device type.
+        self.running_status = ('<','>')
+        self.stopped_status = (':', ) 
+        self.stalled_status = ('*',) 
         try:
             self.firmware_version = self.get_version()
             self.update_state()
@@ -65,6 +72,45 @@ class Pump:
         rep = f"{self.__class__.__name__} Object (name = {self.name}) on <{str(self.serialcon)}> with address <{self.address}>.\n"
         rep += f"State: {self.state}, Mode: {self.mode}, Direction: {self.direction}, Parallel/Reciprocal: {self.parallel_reciprocal}"
         return rep
+
+    def parse_float_response(self, response: str) -> float:
+        """
+        Parse a float value from a response string.
+
+        Parameters
+        ----------
+        response : str
+            Response string from the pump.
+
+        Returns
+        -------
+        float
+            Parsed float value.
+        """
+        try:
+            return float(response.strip())
+        except ValueError:
+            raise PumpError(f'{self.name}: could not parse float from response {response}')
+
+    def parse_float_to_str(self, number: float) -> str:
+        """
+        Convert a float to a string with 5 symbols, including the seperator.
+        e.g. 12.3 becomes 12.30, 12.345 becomes 12.35, and 2.1 becomes 2.100.
+
+        Parameters
+        ----------
+        number : float
+            Number to convert.
+
+        Returns
+        -------
+        str
+            String representation of the number with two decimal places.
+        """
+        if not (0 <= number < 9999):
+            raise ValueError(f'{self.name}: {number} is out of range for parsing, must be between 0 and 9999')
+        parsed = f"{number:.3f}"[:5].ljust(5, '0')
+        return parsed
 
     def write(self, command: str):
         logging.debug(f'{self.name}: writing command: {command}')
@@ -84,7 +130,7 @@ class Pump:
         self.write(instruction)
         response = self.read(80).splitlines()
         if not response or len(response) == 0:
-            raise PumpError(f'{self.name}: no response to command <{instruction}> - pump may be disconnected?')
+            raise PumpNoResponseError(f'{self.name}: no response to command <{instruction}> - pump may be disconnected?')
         elif '?' in response[1]:
             raise PumpSyntaxError(f'{self.name}: pump reported SYNTAX ERROR when <{instruction}> was issued.')
         elif 'NA' in response[1]:
@@ -93,12 +139,63 @@ class Pump:
             raise PumpOutOfRangeError(f'{self.name}: pump reported OUT OF RANGE error when <{instruction}> was issued.')
         return response
 
+    def run(self, already_running_ok: bool = True):
+        """
+        Starts the pump. If the pump is already running and `already_running_ok` is False, the method raises an exception.
+        Parameters
+        ----------
+        already_running_ok : bool, optional
+            If True, does not raise an error if the pump is already running (default is True).
+        """
+        try:
+            resp = self.issue_command('RUN')
+        except PumpNotApplicableError as e:
+            if already_running_ok:
+                logging.info(f'{self.name}: Pump is already running, continuing without error.')
+                return
+            else:
+                raise PumpNotApplicableError(f'{self.name}: Pump is already running, cannot start pump.')
+        except PumpNoResponseError as e:
+            # sometimes response is slow after run command for no clear reason run again to be sure it is ok:
+            logging.warning(f'{self.name}: Pump gave no response after run command, try again before throwing error.')
+            resp = self.issue_command('RUN')
+        
+        state = self.get_state()
+        if state in self.running_status:
+            self.state = 'infusing'
+            logging.info(f'{self.name}: Pump has started running')
+        else:
+            raise PumpError(f'{self.name}: pump is not running: {state}')
+        self.update_state()
+
+    def stop(self, already_stopped_ok: bool = True):
+        """
+        Stops pump. If the pump is already stopped, nothing will happen.
+        """
+        try:
+            resp = self.issue_command('STP')
+        except PumpNotApplicableError as e:
+            if already_stopped_ok:
+                logging.info(f'{self.name}: Pump is already stopped, continuing without error.')
+            else:
+                raise PumpNotApplicableError(f'{self.name}: Pump is already stopped, cannot stop pump.')
+       
+        state = self.get_state()
+        if state in self.stopped_status:
+            self.state = 'idle'
+            logging.info(f'{self.name}: stopped pump')
+        else:
+            raise PumpError(f'{self.name}: pump has not stopped: {state}')
+        self.update_state()
+
+
+
     def update_state(self):
+        """TODO: do this in a way that updates for each device."""
         self.state = self.get_state()
         self.mode = self.get_mode()
         self.direction = self.get_direction()
-        self.parallel_reciprocal = self.get_parallel_reciprocal()
-        if self.state == '*':
+        if self.state == self.stalled_status:
             logging.warning(f'{self.name}: pump is stalled, please check the syringe!')
 
     def get_version(self) -> str:
@@ -774,19 +871,19 @@ class PumpPHD2000_NoRefill(PumpPHD2000):
         """Set the direction of the pump.
         Will raise an PumpFunctionNotAvailable error
         """
-        raise PumpFunctionNotAvailable(f"{self.name}: This pump does not support changing pump direction")
+        raise PumpFunctionNotAvailableError(f"{self.name}: This pump does not support changing pump direction")
 
     def set_refill_rate(self, flowrate:float, unit:str=""):
         """Will raise an PumpFunctionNotAvailable error"""
-        raise PumpFunctionNotAvailable(f"{self.name}: This pump cannot refill, and thus a refill rate cannot be set.")
+        raise PumpFunctionNotAvailableError(f"{self.name}: This pump cannot refill, and thus a refill rate cannot be set.")
     
     def get_refill_rate(self) -> tuple[float,str]:
         """Will raise an PumpFunctionNotAvailable error"""
-        raise PumpFunctionNotAvailable(f"{self.name}: This pump cannot refill, and thus a refill rate cannot be get.")
+        raise PumpFunctionNotAvailableError(f"{self.name}: This pump cannot refill, and thus a refill rate cannot be get.")
 
     def set_autofill(self, autofill:str):
         """Will raise an PumpFunctionNotAvailable error"""
-        raise PumpFunctionNotAvailable(f"{self.name}: This pump cannot refill, and thus auto-fill mode is always OFF.")
+        raise PumpFunctionNotAvailableError(f"{self.name}: This pump cannot refill, and thus auto-fill mode is always OFF.")
 
 class PumpModel33:
     """Create Pump object for Harvard Model 33 twin syringe pump.
@@ -1251,6 +1348,11 @@ class PumpModel33:
 class PumpError(Exception):
     pass
 
+class PumpNoResponseError(PumpError):
+    """Raised when the pump gives no response."""
+    def __init__(self, message):
+        super().__init__(message)   
+
 class PumpSyntaxError(PumpError):
     """Raised when the pump returns a syntax error."""
     def __init__(self, message):
@@ -1271,7 +1373,7 @@ class PumpStallError(PumpError):
     def __init__(self, message):
         super().__init__(message)
         
-class PumpFunctionNotAvailable(PumpError):
+class PumpFunctionNotAvailableError(PumpError):
     """Raised when we try to use a function a pump does not have (like refilling mode)"""
     def __init__(self, message):
         super().__init__(message)
