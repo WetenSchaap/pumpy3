@@ -42,19 +42,35 @@ chain = pumpy3.Chain("com5",baudrate=9600,timeout=0.1)
 pump1 = pumpy3.PumpModel33(chain, address=1, name="pump1")
 
 #%% Test the pump
+
 pump1.stop() # stop the pump if it is running
-pump1.set_diameter(8.08, 1) # this is a 1 mm diameter syringe
-pump1.set_diameter(7.01, 2) # this is a 1 mm diameter syringe
+time.sleep(1)
+pump1.set_diameter(18.08, 1) # this is a 1 mm diameter syringe
+time.sleep(1)
+
+pump1.set_diameter(02.01, 2) # this is a 1 mm diameter syringe
+time.sleep(1)
+
 pump1.set_mode("PRO") # set to PROportional mode
+time.sleep(1)
+
 pump1.set_direction("INF") # set syringe 1 to INFuse
+time.sleep(1)
+
 pump1.set_parallel_reciprocal("OFF") # reciprocal direction (so syringe 2 retracts now)
+time.sleep(1)
+
 pump1.set_rate(12.2, "ml/hr", 1) # set speed to 1 ml/h
+time.sleep(1)
+
 pump1.set_rate(23, "ul/mn", 2) # set speed to 2 ml/h
+time.sleep(1)
+
 
 print(pump1)
 
 pump1.log_all_parameters()
-
+pump1.log_all_settings()
 print("does everything look good?")
 
 #%% Actually run
