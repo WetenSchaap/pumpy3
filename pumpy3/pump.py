@@ -168,7 +168,7 @@ class Pump:
         self.write(instruction)
         response = self.read(80).splitlines()
         if not response or len(response) == 0:
-            raise PumpError(f'{self.name}: no response to command <{instruction}> - pump may be disconnected?')
+            raise PumpNoResponseError(f'{self.name}: no response to command <{instruction}> - pump may be disconnected?')
         # The next lines handle the error response from the pump.
         elif '?' in response[1]:
             logging.error(f'{self.name}: pump reported SYNTAX ERROR when <{instruction}> was issued.')
@@ -206,7 +206,7 @@ class Pump:
             if no_response_ok:
                 logging.warning(f'{self.name}: Pump gave no response after run command.')
             else:
-                raise
+                raise e
         return
 
     def run(self, already_running_ok: bool = True):
@@ -464,7 +464,7 @@ class Pump:
         for syr in self.syringe_selection.keys():
             logging.info(f'syringe <{syr}>:')
             logging.info(f'\trate: {self.get_rate(syr)}')
-            logging.info(f'\tdiameter: {self.get_diameter(syr)}')
+            logging.info(f'\tdiameter: {self.get_diameter(syr)} mm')
 
     def sleep_with_heartbeat(self, sleep_time: float, beat_interval: float = 5, error_wakeup: bool = False):
         """Sleep for a specified number of seconds, while checking the pump state to watch for stall, and making sure pump is not disconnected during wait.
@@ -634,9 +634,13 @@ class PumpPHD2000_new(Pump):
         resp = self.issue_command('AF')
         return resp[1].strip()
 
+    def set_autofill(self, autofill:str):
+        """Will raise an PumpFunctionNotAvailable error"""
+        raise PumpFunctionNotAvailableError(f"{self.name}: This pump cannot refill, and thus auto-fill mode is always OFF.")
+
     def log_all_settings(self):
-        super().log_all_parameters()
-        logging.info(f'autofill: {self.get_autofill()}')
+        super().log_all_settings()
+        logging.info(f'\tautofill: {self.get_autofill()}')
 
     def log_all_parameters(self):
         """
@@ -647,9 +651,22 @@ class PumpPHD2000_new(Pump):
             logging.info(f'syringe <{syr}>:')
             logging.info(f'\trate: {self.get_rate(syr)}')
             logging.info(f'\trefill_rate: {self.get_refill_rate(syr)}')
-            logging.info(f'\tdiameter: {self.get_diameter(syr)}')
-            logging.info(f'\tvolume_delivered: {self.get_volume_delivered()}')
-            logging.info(f'\ttarget_volume(: {self.get_target_volume()}')
+            logging.info(f'\tdiameter: {self.get_diameter(syr)} mm')
+            logging.info(f'\tvolume_delivered: {self.get_volume_delivered()} mL')
+            logging.info(f'\ttarget_volume: {self.get_target_volume()} mL')
+
+    def set_refill_rate(self, flowrate:float, unit:str=""):
+        """Will raise an PumpFunctionNotAvailable error"""
+        raise PumpFunctionNotAvailableError(f"{self.name}: This pump cannot refill, and thus a refill rate cannot be set.")
+
+    def get_refill_rate(self, syringe:float=0) -> tuple[float,str]:
+        """This pump does not have refill capabilities. Will always return a random number"""
+        logging.warning(f'{self.name}: refill rate requested, but does not exist for this pump. User given a random number')
+        return (4, list(self.unit_conversion.keys())[-1])
+
+    def set_direction(self, direction: str):
+        """Will raise an PumpFunctionNotAvailable error"""
+        raise PumpFunctionNotAvailableError(f"{self.name}: This pump does not support changing pump direction")
 
 class PumpPHD2000_Refill_new(PumpPHD2000_new):
     def __init__(self, chain:Chain, address:int=0, name:str='PHD2000'):
@@ -681,9 +698,15 @@ class PumpPHD2000_Refill_new(PumpPHD2000_new):
         else:
             raise PumpError(f'{self.name}: refill flowrate not set correctly, response to set_rate {flowrate} {unit}: {rate_reply}')
         
-    def get_refill_rate(self) -> tuple[float, str]:
-        """Get refill flow rate.
+    def get_refill_rate(self, syringe:float=0) -> tuple[float, str]:
+        """
+        Gets the refill flow rate.
 
+        Parameters
+        ----------
+        syringe : float, optional
+            The syringe number (default is 0, use if syringes not individually addressable).
+        
         Returns
         -------
         tuple of float and str
@@ -719,22 +742,6 @@ class PumpPHD2000_Refill_new(PumpPHD2000_new):
 class PumpPHD2000_NoRefill_new(PumpPHD2000_new):
     def __init__(self, chain:Chain, address:int=0, name:str='PHD2000'):
         super().__init__(chain,address,name)
-
-    def set_direction(self, direction: str):
-        """Will raise an PumpFunctionNotAvailable error"""
-        raise PumpFunctionNotAvailableError(f"{self.name}: This pump does not support changing pump direction")
-
-    def set_refill_rate(self, flowrate:float, unit:str=""):
-        """Will raise an PumpFunctionNotAvailable error"""
-        raise PumpFunctionNotAvailableError(f"{self.name}: This pump cannot refill, and thus a refill rate cannot be set.")
-    
-    def set_autofill(self, autofill:str):
-        """Will raise an PumpFunctionNotAvailable error"""
-        raise PumpFunctionNotAvailableError(f"{self.name}: This pump cannot refill, and thus auto-fill mode is always OFF.")
-
-    def get_refill_rate(self) -> tuple[float,str]:
-        """This pump does not have refill capabilities. Will always return a random number"""
-        return 4
 
 # Old classes:
 

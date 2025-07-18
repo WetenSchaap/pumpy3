@@ -15,7 +15,7 @@ stream_handler.setFormatter(formatter)
 
 # Set level
 file_handler.setLevel(logging.DEBUG)
-stream_handler.setLevel(logging.DEBUG)
+stream_handler.setLevel(logging.INFO)
 
 # Get root logger and add handlers
 logger = logging.getLogger()
@@ -39,7 +39,7 @@ logging.critical('This is a critical message')
 #%%
 chain = pumpy3.Chain("com5",baudrate=9600,timeout=0.2)
 
-pump1 = pumpy3.PumpPHD2000_NoRefill(chain, 3, name="pump1")
+pump1 = pumpy3.PumpPHD2000_NoRefill_new(chain, 3, name="pump1")
 
 
 #%% Test the pump
@@ -54,7 +54,6 @@ pump1.get_rate()
 pump1.get_volume_delivered()
 pump1.get_target_volume()
 pump1.get_state()
-pump1.update_state()
 
 try:
 	pump1.get_refill_rate()
@@ -81,11 +80,16 @@ for func in failing_funcs:
 	except pumpy3.PumpFunctionNotAvailableError:
 		print("function failed succesfully")
 
+pump1.set_rate(2.0, "ml/hr") 
 pump1.run() # start the pump
 
 print(pump1)
 
 pump1.stop()
+
+pump1.log_all_settings()
+pump1.log_all_parameters()
+
 
 print("does everything look good?")
 
