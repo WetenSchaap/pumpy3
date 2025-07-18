@@ -56,6 +56,7 @@ pump2.set_rate(2, "ml/mn", 2)
 print(pump1)
 
 pump1.log_all_parameters()
+pump1.log_all_settings()
 
 print("does everything look good?")
 

@@ -39,7 +39,7 @@ logging.critical('This is a critical message')
 #%%
 chain = pumpy3.Chain("com5",baudrate=9600,timeout=0.2)
 
-pump1 = pumpy3.PumpPHD2000_NoRefill_new(chain, 3, name="pump1")
+pump1 = pumpy3.PumpPHD2000_NoRefill(chain, 3, name="pump1")
 
 
 #%% Test the pump
